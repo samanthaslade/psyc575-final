@@ -1,0 +1,782 @@
+---
+title: "hw9_Betts_Conteh"
+author: "Samantha Betts & Yema Conteh"
+date: "2022-12-04"
+geometry: margin=0.5cm
+output:
+  html_document: default
+  github_document:
+  word_document: default
+  pdf_document: 
+    toc: true
+  md_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Load packages
+
+```{r load-pkg, message=FALSE}
+R.Version()
+library(ggpubr)
+library(data.table)
+library(cAIC4)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(lattice)
+library(tableone)
+library(lme4)
+library(nlme)
+library(lmerTest)
+library(car)
+library(sjPlot)
+library(plyr)
+library(brms)
+library(Hmisc)
+library(corrplot)
+library(modelsummary)
+library(lubridate)
+library(data.table)
+library(glmmTMB)
+library(interactions)
+library(gt)
+```
+
+# Preliminary Analysis 
+
+## Import data
+
+```{r data-import, message=FALSE}
+cbcls.sb<-readRDS('/Users/samanthabetts/Desktop/ABCD_4.0/cbcls.sb.RDS')
+pdem02.sb<-readRDS('/Users/samanthabetts/Desktop/ABCD_4.0/pdem02.sb.RDS')
+pds.sb<-readRDS('/Users/samanthabetts/Desktop/ABCD_4.0/pds.sb.RDS')
+lt01<-read.delim('/Users/samanthabetts/Desktop/ABCD_4.0/abcd_lt01.txt')
+acspsw03=read.delim(file='/Users/samanthabetts/Desktop/ABCD_4.0/acspsw03.txt')
+ant01_bmi<-readRDS('/Users/samanthabetts/Desktop/ABCD_4.0/ant01_bmi.RDS')
+exclusions<-load("/Users/samanthabetts/exclusions.Rdata")
+sds=read.delim(file = '/Users/samanthabetts/Desktop/ABCD_4.0/abcd_sds01.txt')
+```
+
+## CBCL variables 
+
+```{r cbcls-vars}
+cbcls_sb<-c('cbcl_scr_syn_withdep_r_sb','cbcl_scr_syn_anxdep_r_sb','cbcl_scr_syn_somatic_r_sb',
+'cbcl_scr_syn_social_r_sb','cbcl_scr_syn_thought_r_sb','cbcl_scr_syn_aggressive_r_sb','cbcl_scr_syn_rulebreak_r_sb',
+'cbcl_scr_syn_internal_r_sb','cbcl_scr_syn_external_r_sb','cbcl_scr_dsm5_adhd_r_sb','cbcl_scr_dsm5_opposit_r_sb',
+'cbcl_scr_dsm5_conduct_r_sb','cbcl_scr_07_sct_r_sb','cbcl_scr_dsm5_somaticpr_r_sb','cbcl_scr_dsm5_depress_r_sb',
+'cbcl_scr_07_ocd_r_sb','cbcl_scr_07_ocs11_r_sb','cbcl_scr_syn_totprob_r_sb')
+```
+
+## Make data frame
+
+```{r make-dataframe}
+cnames<-c("src_subject_id","subjectkey","eventname","interview_date", "interview_age", "sex")
+df_list <- list(pdem02.sb, cbcls.sb, pds.sb, lt01, acspsw03, ant01_bmi)
+for (ii in 1:length(df_list)){
+    df_list[[ii]]<-df_list[[ii]][,(!(names(df_list[[ii]])=="collection_title")) 
+    & (!(names(df_list[[ii]])=="collection_id"))  & (!(names(df_list[[ii]])=="dataset_id"))
+    & (!(names(df_list[[ii]])=="study_cohort_name"))]
+}
+df=Reduce(function(x, y) merge(x, y, by=cnames, all=TRUE), df_list)
+df<-df[-(which(duplicated(df))),]
+```
+
+## Recode variables
+
+```{r message=TRUE, warning=TRUE}
+pandemic_start<-"2020-03-11" #WHO declares COVID-19 a pandemic
+pandemic_6mo<-"2020-09-11" 
+
+df$interview.date<-as.Date(df$interview_date, format = "%m/%d/%Y")
+df$interview.age<-as.numeric(as.character(df$interview_age))
+min_date<-min(df$interview.date,na.rm=T)
+df$abcd_time<-difftime(df$interview.date, min_date, units="days")
+df$abcd_time_mos<-round(difftime(df$interview.date, min_date, units="days")/(365/12))
+  
+df$pandemic_days<-as.numeric(difftime(df$interview.date, as.Date(pandemic_start),  units="days")) 
+df$pandemic_mos<-as.numeric(difftime(df$interview.date, as.Date(pandemic_start), units="days")/(365/12)) 
+df$pandemic_days_expo<-df$pandemic_days
+df$pandemic_days_expo[which(df$pandemic_days_expo<=0)]<-0
+df$pandemic_mos_expo<-df$pandemic_mos
+df$pandemic_mos_expo[which(df$pandemic_mos_expo<=0)]<-0
+
+df$highedu<-as.numeric(as.character(df$high.edu))
+df<-setDT(df)[ ,high.educ:=max(highedu,na.rm=T), by=src_subject_id]
+df<-as.data.frame(df)  
+df$high.educ[which(df$high.educ=="0")]<-NA
+df$high.educ<-as.factor(df$high.educ)
+
+df$rel_family_id<-as.numeric(as.character(df$rel_family_id))
+df<-setDT(df)[ ,fam_id:=max(rel_family_id,na.rm=T), by=src_subject_id]
+df<-as.data.frame(df)  
+df$fam_id<-as.factor(df$fam_id)
+
+df$pds<-as.numeric(df$pds_stage_yp)
+
+df$interview.month<-month(df$interview.date)
+
+age_base<-min(as.numeric(df$interview_age), na.rm=T)
+df$time<-as.numeric(df$interview_age)-age_base
+df$time_6mo<-round(df$time/6)
+df$abcd_time_mos<-as.numeric(df$abcd_time_mos)
+df$abcd_time<-as.numeric(df$abcd_time)
+
+df$event<-NA
+df$event[which(df$eventname=="baseline_year_1_arm_1")]<-0
+df$event[which(df$eventname=="1_year_follow_up_y_arm_1")]<-1
+df$event[which(df$eventname=="2_year_follow_up_y_arm_1")]<-2
+df$event[which(df$eventname=="3_year_follow_up_y_arm_1")]<-3
+
+df$pandemic_time<-NA
+df$pandemic_time[which(df$interview.date<pandemic_start)]<-0
+df$pandemic_time[which(df$interview.date>pandemic_start)]<-1
+
+df<-df[which(df$pandemic_mos_expo>=6 | (df$pandemic_mos_expo==0)),] 
+```
+
+## Convert to wide form
+
+```{r pivot-wide, message=FALSE}
+df_wide<-pivot_wider(data=df, id_cols=c(src_subject_id, sex, site_id_l),    
+    names_from=eventname, values_from=c(interview.date, time, interview_age, rel_family_id, high.educ, pds_stage_yp, pds, pandemic_mos, pandemic_mos_expo, fam_id, all_of(cbcls_sb)))
+
+df_wide$fam_id<-df_wide$rel_family_id_baseline_year_1_arm_1
+#df_wide$high.edu<-df_wide$high.edu_baseline_year_1_arm_1
+
+df_wide$pandemic<-NA
+df_wide$pandemic[which((df_wide$interview.date_baseline_year_1_arm_1<pandemic_start) & 
+    (df_wide$interview.date_2_year_follow_up_y_arm_1<pandemic_start))]<-0
+df_wide$pandemic[which((df_wide$interview.date_baseline_year_1_arm_1<pandemic_start) & 
+    (df_wide$interview.date_2_year_follow_up_y_arm_1>pandemic_start))]<-1
+df_wide$pandemic<-as.factor(df_wide$pandemic)
+
+df_wide$interview_y1base<-as.numeric(difftime(df_wide$interview.date_1_year_follow_up_y_arm_1, 
+     df_wide$interview.date_baseline_year_1_arm_1, "days"))
+df_wide$interview_y1base_mos<-as.numeric(difftime(df_wide$interview.date_1_year_follow_up_y_arm_1, 
+  df_wide$interview.date_baseline_year_1_arm_1, units="days")/(365/12))
+
+df_wide$interview_y2base<-as.numeric(difftime(df_wide$interview.date_2_year_follow_up_y_arm_1,
+    df_wide$interview.date_baseline_year_1_arm_1, "days"))
+df_wide$interview_y2base_mos<-as.numeric(difftime(df_wide$interview.date_2_year_follow_up_y_arm_1,
+    df_wide$interview.date_baseline_year_1_arm_1, units="days")/(365/12))
+df_wide$interview_y2y1<-as.numeric(difftime(df_wide$interview.date_2_year_follow_up_y_arm_1,
+    df_wide$interview.date_1_year_follow_up_y_arm_1, "days"))
+df_wide$interview_y2y1_mos<-as.numeric(difftime(df_wide$interview.date_2_year_follow_up_y_arm_1, 
+    df_wide$interview.date_1_year_follow_up_y_arm_1, units="days")/(365/12))
+df_wide$interview_y3y2<-as.numeric(difftime(df_wide$interview.date_3_year_follow_up_y_arm_1,
+    df_wide$interview.date_2_year_follow_up_y_arm_1, "days"))
+df_wide$interview_y3y2_mos<-as.numeric(difftime(df_wide$interview.date_3_year_follow_up_y_arm_1,
+    df_wide$interview.date_2_year_follow_up_y_arm_1, units="days")/(365/12))
+
+df_wide$age_baseline<-as.numeric(df_wide$interview_age_baseline_year_1_arm_1)
+df_wide$age_y1<-as.numeric(df_wide$interview_age_1_year_follow_up_y_arm_1)
+df_wide$age_y2<-as.numeric(df_wide$interview_age_2_year_follow_up_y_arm_1)
+df_wide$time_baseline<-df_wide$time_baseline_year_1_arm_1
+df_wide$time_y1<-df_wide$time_1_year_follow_up_y_arm_1
+df_wide$time_y2<-df_wide$time_2_year_follow_up_y_arm_1
+
+df_wide$pds_baseline<-as.numeric(df_wide$pds_stage_yp_baseline_year_1_arm_1)
+df_wide$pds_y1<-as.numeric(df_wide$pds_stage_yp_1_year_follow_up_y_arm_1)
+df_wide$pds_y2<-as.numeric(df_wide$pds_stage_yp_2_year_follow_up_y_arm_1)
+
+cv_subs_y2<-df_wide$src_subject_id[which(df_wide$pandemic=="1")]
+precv_subs_y2<-df_wide$src_subject_id[which(df_wide$pandemic=="0")]
+
+df$pandemic<-NA
+df$pandemic[which(df$src_subject_id %in% cv_subs_y2)]<-1
+df$pandemic[which(df$src_subject_id %in% precv_subs_y2)]<-0
+df$pandemic<-as.factor(df$pandemic)
+
+```
+
+## Calculate change scores
+
+```{r cbcl-change}
+ cbcls_cnames_y2<-c('cbcl_scr_syn_withdep_r_sb_2_year_follow_up_y_arm_1','cbcl_scr_syn_anxdep_r_sb_2_year_follow_up_y_arm_1', 'cbcl_scr_syn_somatic_r_sb_2_year_follow_up_y_arm_1', 'cbcl_scr_syn_social_r_sb_2_year_follow_up_y_arm_1', 'cbcl_scr_syn_thought_r_sb_2_year_follow_up_y_arm_1',  'cbcl_scr_syn_aggressive_r_sb_2_year_follow_up_y_arm_1', 'cbcl_scr_syn_rulebreak_r_sb_2_year_follow_up_y_arm_1')
+
+# 
+cbcls_cnames_y1<-c('cbcl_scr_syn_withdep_r_sb_1_year_follow_up_y_arm_1','cbcl_scr_syn_anxdep_r_sb_1_year_follow_up_y_arm_1', 'cbcl_scr_syn_somatic_r_sb_1_year_follow_up_y_arm_1', 'cbcl_scr_syn_social_r_sb_1_year_follow_up_y_arm_1', 'cbcl_scr_syn_thought_r_sb_1_year_follow_up_y_arm_1',  'cbcl_scr_syn_aggressive_r_sb_1_year_follow_up_y_arm_1', 'cbcl_scr_syn_rulebreak_r_sb_1_year_follow_up_y_arm_1')
+ 
+cbcls_cnames_base<-c('cbcl_scr_syn_withdep_r_sb_baseline_year_1_arm_1','cbcl_scr_syn_anxdep_r_sb_baseline_year_1_arm_1','cbcl_scr_syn_somatic_r_sb_baseline_year_1_arm_1','cbcl_scr_syn_social_r_sb_baseline_year_1_arm_1','cbcl_scr_syn_thought_r_sb_baseline_year_1_arm_1','cbcl_scr_syn_aggressive_r_sb_baseline_year_1_arm_1','cbcl_scr_syn_rulebreak_r_sb_baseline_year_1_arm_1')
+
+cbcls_cnames_y1base<-c("cbcl_withdep_syn_y1base", "cbcl_anxdep_syn_y1base", "cbcl_somatic_syn_y1base", "cbcl_social_syn_y1base", "cbcl_thought_syn_y1base", "cbcl_aggressive_y1base", "cbcl_rulebreak_syn_y1base")
+
+cbcls_cnames_y2y1<-c("cbcl_withdep_syn_y2y1", "cbcl_anxdep_syn_y2y1", "cbcl_somatic_syn_y2y1", "cbcl_social_syn_y2y1", "cbcl_thought_syn_y2y1", "cbcl_aggressive_y2y1", "cbcl_rulebreak_syn_y2y1")
+
+#df_wide[,cbcls_cnames_y2base[1]]<-df_wide[,cbcls_cnames_y2[1]]-df_wide[,cbcls_cnames_base[1]]
+#df_wide[,cbcls_cnames_y2base[2]]<-df_wide[,cbcls_cnames_y2[2]]-df_wide[,cbcls_cnames_base[2]]
+#df_wide[,cbcls_cnames_y2base[3]]<-df_wide[,cbcls_cnames_y2[3]]-df_wide[,cbcls_cnames_base[3]]
+#df_wide[,cbcls_cnames_y2base[4]]<-df_wide[,cbcls_cnames_y2[4]]-df_wide[,cbcls_cnames_base[4]]
+#df_wide[,cbcls_cnames_y2base[5]]<-df_wide[,cbcls_cnames_y2[5]]-df_wide[,cbcls_cnames_base[5]]
+#df_wide[,cbcls_cnames_y2base[6]]<-df_wide[,cbcls_cnames_y2[6]]-df_wide[,cbcls_cnames_base[6]]
+#df_wide[,cbcls_cnames_y2base[7]]<-df_wide[,cbcls_cnames_y2[7]]-df_wide[,cbcls_cnames_base[7]]
+
+df_wide[,cbcls_cnames_y1base[1]]<-df_wide[,cbcls_cnames_y1[1]]-df_wide[,cbcls_cnames_base[1]]
+df_wide[,cbcls_cnames_y1base[2]]<-df_wide[,cbcls_cnames_y1[2]]-df_wide[,cbcls_cnames_base[2]]
+df_wide[,cbcls_cnames_y1base[3]]<-df_wide[,cbcls_cnames_y1[3]]-df_wide[,cbcls_cnames_base[3]]
+df_wide[,cbcls_cnames_y1base[4]]<-df_wide[,cbcls_cnames_y1[4]]-df_wide[,cbcls_cnames_base[4]]
+df_wide[,cbcls_cnames_y1base[5]]<-df_wide[,cbcls_cnames_y1[5]]-df_wide[,cbcls_cnames_base[5]]
+df_wide[,cbcls_cnames_y1base[6]]<-df_wide[,cbcls_cnames_y1[6]]-df_wide[,cbcls_cnames_base[6]]
+df_wide[,cbcls_cnames_y1base[7]]<-df_wide[,cbcls_cnames_y1[7]]-df_wide[,cbcls_cnames_base[7]]
+
+df_wide[,cbcls_cnames_y2y1[1]]<-df_wide[,cbcls_cnames_y2[1]]-df_wide[,cbcls_cnames_y1[1]]
+df_wide[,cbcls_cnames_y2y1[2]]<-df_wide[,cbcls_cnames_y2[2]]-df_wide[,cbcls_cnames_y1[2]]
+df_wide[,cbcls_cnames_y2y1[3]]<-df_wide[,cbcls_cnames_y2[3]]-df_wide[,cbcls_cnames_y1[3]]
+df_wide[,cbcls_cnames_y2y1[4]]<-df_wide[,cbcls_cnames_y2[4]]-df_wide[,cbcls_cnames_y1[4]]
+df_wide[,cbcls_cnames_y2y1[5]]<-df_wide[,cbcls_cnames_y2[5]]-df_wide[,cbcls_cnames_y1[5]]
+df_wide[,cbcls_cnames_y2y1[6]]<-df_wide[,cbcls_cnames_y2[6]]-df_wide[,cbcls_cnames_y1[6]]
+df_wide[,cbcls_cnames_y2y1[7]]<-df_wide[,cbcls_cnames_y2[7]]-df_wide[,cbcls_cnames_y1[7]]
+
+colnames(df_wide)[which(names(df_wide) %in% cbcls_cnames_base[1:7])]<-c("cbcl_withdep_syn_baseline", "cbcl_anxdep_syn_baseline", "cbcl_somatic_syn_baseline", "cbcl_social_syn_baseline","cbcl_thought_syn_baseline", "cbcl_aggressive_syn_baseline", "cbcl_rulebreak_syn_baseline")
+
+cbcls_cnames_base[1:7]<-c("cbcl_withdep_syn_baseline", "cbcl_anxdep_syn_baseline", "cbcl_somatic_syn_baseline", "cbcl_social_syn_baseline", "cbcl_thought_syn_baseline", "cbcl_aggressive_syn_baseline", "cbcl_rulebreak_syn_baseline")
+
+```
+
+## Subset
+
+```{r subset}
+df_wide_subset<-df_wide[!apply(df_wide[,c(cbcls_cnames_y2[1:7], cbcls_cnames_y1[1:7], cbcls_cnames_base[1:7], "high.educ_baseline_year_1_arm_1","sex", "site_id_l", "fam_id", "pandemic","time_baseline","pds_baseline", "time_y1","pds_y1", "time_y2","pds_y2")] == "", 1, any),]
+df_wide_subset<-df_wide_subset[!apply(is.na(df_wide_subset[,c(cbcls_cnames_y2[1:7], cbcls_cnames_y1[1:7], cbcls_cnames_base[1:7], "high.educ_baseline_year_1_arm_1","sex", "site_id_l", "fam_id", "pandemic","time_baseline","pds_baseline", "time_y1","pds_y1", "time_y2","pds_y2")]), 1, any),]
+
+```
+
+## Data exploration
+
+```{r data-exploration}
+
+#correlations
+mycor<-rcorr(sapply(df_wide, unlist)[,c("age_baseline","pds_baseline","interview_y1base_mos",cbcls_cnames_base[1:7],cbcls_cnames_y1base[1:7])])
+mytab.p<-mycor$P[cbcls_cnames_y1base[1:7], c("age_baseline","pds_baseline","interview_y1base_mos",cbcls_cnames_base[1:7])]
+mytab.r<-mycor$r[cbcls_cnames_y1base[1:7], c("age_baseline","pds_baseline","interview_y1base_mos",cbcls_cnames_base[1:7])]
+corrplot(mytab.r, method="color", addCoef.col = "black", tl.col="black", tl.srt=80, p.mat = mytab.p, sig.level = 0.05, insig = "pch", pch.col = "grey")
+mycor[["P"]][,c("age_baseline","pds_baseline")]
+mycor[["R"]][,c("age_baseline","pds_baseline")]
+
+#Wilcox signed-rank test
+wilcox.1<-wilcox.test(df_wide_subset$cbcl_withdep_syn_y1base[which(df_wide_subset$sex=="F")],df_wide_subset$cbcl_withdep_syn_y1base[which(df_wide_subset$sex=="M")])
+wilcox.2<-wilcox.test(df_wide_subset$cbcl_anxdep_syn_y1base[which(df_wide_subset$sex=="F")],df_wide_subset$cbcl_anxdep_syn_y1base[which(df_wide_subset$sex=="M")])
+wilcox.3<-wilcox.test(df_wide_subset$cbcl_somatic_syn_y1base[which(df_wide_subset$sex=="F")],df_wide_subset$cbcl_somatic_syn_y1base[which(df_wide_subset$sex=="M")])
+wilcox.4<-wilcox.test(df_wide_subset$cbcl_social_syn_y1base[which(df_wide_subset$sex=="F")],df_wide_subset$cbcl_social_syn_y1base[which(df_wide_subset$sex=="M")])
+wilcox.5<-wilcox.test(df_wide_subset$cbcl_thought_syn_y1base[which(df_wide_subset$sex=="F")],df_wide_subset$cbcl_thought_syn_y1base[which(df_wide_subset$sex=="M")])
+wilcox.6<-wilcox.test(df_wide_subset$cbcl_aggressive_y1base[which(df_wide_subset$sex=="F")],df_wide_subset$cbcl_aggressive_y1base[which(df_wide_subset$sex=="M")])
+wilcox.7<-wilcox.test(df_wide_subset$cbcl_rulebreak_syn_y1base[which(df_wide_subset$sex=="F")],df_wide_subset$cbcl_rulebreak_syn_y1base[which(df_wide_subset$sex=="M")])
+
+W<-c(wilcox.1[["statistic"]][["W"]], wilcox.2[["statistic"]][["W"]], wilcox.3[["statistic"]][["W"]], wilcox.4[["statistic"]][["W"]], wilcox.5[["statistic"]][["W"]],wilcox.6[["statistic"]][["W"]], wilcox.7[["statistic"]][["W"]])
+wilcox.p<-c(wilcox.1[["p.value"]],wilcox.2[["p.value"]], wilcox.3[["p.value"]], wilcox.4[["p.value"]], wilcox.5[["p.value"]], wilcox.6[["p.value"]], wilcox.7[["p.value"]])
+wilcox_table<-as.table(cbind(W, wilcox.p))
+rownames(wilcox_table)<-cbcls_cnames_y1base[1:7]
+colnames(wilcox_table)<-c("W","p-value")
+wilcox_table
+
+# CBCL change by highest parental education 
+# ggplot(df_wide_subset[which(!(is.na(df_wide_subset$high.edu))),]) + geom_boxplot(aes(high.edu,cbcl_withdep_syn_y1base)) 
+# ggplot(df_wide_subset[which(!(is.na(df_wide_subset$high.edu))),]) + geom_boxplot(aes(high.edu,cbcl_anxdep_syn_y1base))
+# ggplot(df_wide_subset[which(!(is.na(df_wide_subset$high.edu))),]) + geom_boxplot(aes(high.edu,cbcl_somatic_syn_y1base))
+# ggplot(df_wide_subset[which(!(is.na(df_wide_subset$high.edu))),]) + geom_boxplot(aes(high.edu,cbcl_social_syn_y1base))
+# ggplot(df_wide_subset[which(!(is.na(df_wide_subset$high.edu))),]) + geom_boxplot(aes(high.edu,cbcl_thought_syn_y1base))
+# ggplot(df_wide_subset[which(!(is.na(df_wide_subset$high.edu))),]) + geom_boxplot(aes(high.edu,cbcl_aggressive_y1base))
+# ggplot(df_wide_subset[which(!(is.na(df_wide_subset$high.edu))),]) + geom_boxplot(aes(high.edu,cbcl_rulebreak_syn_y1base))
+# 
+# kruskal.1<-kruskal.test(df_wide_subset$cbcl_withdep_syn_y1base,df_wide_subset$high.edu)
+# kruskal.2<-kruskal.test(df_wide_subset$cbcl_anxdep_syn_y1base, df_wide_subset$high.edu)
+# kruskal.3<-kruskal.test(df_wide_subset$cbcl_somatic_syn_y1base,df_wide_subset$high.edu)
+# kruskal.4<-kruskal.test(df_wide_subset$cbcl_social_syn_y1base,df_wide_subset$high.edu)
+# kruskal.5<-kruskal.test(df_wide_subset$cbcl_thought_syn_y1base,df_wide_subset$high.edu)
+# kruskal.6<-kruskal.test(df_wide_subset$cbcl_aggressive_y1base,df_wide_subset$high.edu)
+# kruskal.7<-kruskal.test(df_wide_subset$cbcl_rulebreak_syn_y1base,df_wide_subset$high.edu)
+# # 
+# kruskal.chisq<-c(kruskal.1[["statistic"]][["Kruskal-Wallis chi-squared"]],kruskal.2[["statistic"]][["Kruskal-Wallis chi-squared"]], kruskal.3[["statistic"]][["Kruskal-Wallis chi-squared"]],kruskal.4[["statistic"]][["Kruskal-Wallis chi-squared"]], kruskal.5[["statistic"]][["Kruskal-Wallis chi-squared"]],kruskal.6[["statistic"]][["Kruskal-Wallis chi-squared"]], kruskal.7[["statistic"]])
+# kruskal.pval<-c(kruskal.1[["p.value"]], kruskal.2[["p.value"]], kruskal.3[["p.value"]], kruskal.4[["p.value"]],  kruskal.5[["p.value"]], kruskal.6[["p.value"]], kruskal.7[["p.value"]])
+# kruskal_table<-as.table(cbind(kruskal.chisq, kruskal.pval))
+# rownames(kruskal_table)<-cbcls_cnames_y1base[1:7]
+# colnames(kruskal_table)<-c("Kruskal-Wallis chi-squared","p-value")
+# kruskal_table
+
+```
+
+## Sample characteristics (intra-pandemic=1, pre-pandemic=0) 
+
+```{r group-differences}
+
+a<-datasummary_balance(~pandemic, data = df[which((df$eventname=="1_year_follow_up_y_arm_1") & (df$src_subject_id %in% df_wide_subset$src_subject_id)),c("pandemic","interview.age","pds","sex","high.educ")], dinm=F, output = "gt")
+a<- a  %>% tab_header(title= md("**Table 1.** Characteristics of the sample at one-year follow-up"))  %>% opt_align_table_header(align = "left")
+a[["_data"]][[" "]][1:6]<-c("Age (months)","PDS","","Sex", "", "Parental education")
+a[["_spanners"]][["spanner_label"]][[1]]<-"Pre-pandemic (N=6970)" 
+a[["_spanners"]][["spanner_label"]][[2]]<-"Intra-pandemic (N=6970)" 
+
+```
+
+## Variable Summary 
+- `pandemic`: Timing of two-year follow-up visit (1- intra-pandemic; 0- pre-pandemic)
+- `fam_id`: Family ID
+- `site_id_l`: Site ID
+- `src_subject_id`: Subject ID
+- `sex`: Sex of the subject
+- `age_baseline`: Age (months) of the subject at baseline 
+- `pds_baseline` Pubertal status at baseline (1-prepuberty to 5-post puberty)
+- `cbcl_change`: Change in raw CBCL score for each of the 7 CBCL syndrome scales assessed 
+- `cbcl_baseline`: Baseline CBCL score for each of the 7 CBCL syndrome scales assessed 
+- `intervisit_mos`: Months between visits
+- `high.educ`: Highest education level obtained by caregivers (1-< HS Diploma; 2-HS Diploma/GED; 3- Some College; 4- Bachelors; 5- Post Graduate Degree)
+- `abcd_time_mos`: Months since the first baseline visit
+-`time`: Interview age (months) minus minimum age of all subjects at baseline
+
+## Intraclass correlation
+
+```{r icc}
+formula.1<-as.formula(cbcl_change ~ (1|site_id_l))
+formula.2<-as.formula(cbcl_change ~ (1|fam_id))
+formula.3<-as.formula(cbclscale~(1|src_subject_id))
+
+ran_site=list()
+ran_fam=list()
+site_icc=list()
+fam_icc=list()
+deff_fam<-vector()
+deff_site<-vector()
+ran_subj=list()
+subj_icc=list()
+deff_subj<-vector()
+
+for (cc in 1:7) {
+ cbcl_change<-unlist(df_wide_subset[,cbcls_cnames_y1base[cc]])
+ ran_site[[cc]]<-lmer(formula.1,data=df_wide_subset)
+ ran_fam[[cc]]<-lmer(formula.2,data=df_wide_subset)
+ site_icc[[cc]]<-performance::icc(ran_site[[cc]])
+ fam_icc[[cc]]<-performance::icc(ran_fam[[cc]])
+ av_csize_fam<-length(ran_fam[[cc]]@frame[["fam_id"]])/length(unique(ran_fam[[cc]]@frame[["fam_id"]]))
+ deff_fam[cc]=1+(av_csize_fam-1)*fam_icc[[cc]][["ICC_adjusted"]]
+ av_csize_site<-length(ran_site[[cc]]@frame[["site_id_l"]])/length(unique(ran_site[[cc]]@frame[["site_id_l"]]))
+ deff_site[cc]=1+(av_csize_site-1)*site_icc[[cc]][["ICC_adjusted"]]
+ cbclscale<-df[which((df$event=="1" | df$event=="2") & (df$src_subject_id %in% df_wide_subset$src_subject_id)),cbcls_sb[cc]]
+ ran_subj[[cc]]<-lmer(formula.3,data=df[which((df$event=="1" | df$event=="2") & (df$src_subject_id %in% df_wide_subset$src_subject_id)),])
+ subj_icc[[cc]]<-performance::icc(ran_subj[[cc]])
+ av_csize_subj<-2
+ deff_subj[cc]=1+(av_csize_subj-1)*subj_icc[[cc]][["ICC_adjusted"]]
+ }
+
+site_icc
+fam_icc
+subj_icc
+
+deff_site
+deff_fam
+deff_subj
+
+```
+
+
+Although the ICC for fam_id and site are low, the design effects for site are greater than 1.1, suggesting the need for MLM (Lai & Kwok, 2015). 
+
+## Model Equations 
+
+### Change score analyses
+
+Lv-1:
+
+$$ 
+\begin{aligned}
+\text{CBCL_change}_{ij} = \beta_{0j} + \beta_{1j} \text{pandemic}_{ij} + \beta_{2j} \text{CBCL_baseline}_{ij} + \beta_{3j} \text{intervisit_mos}_{ij} + \beta_{4j} \text{time_baseline}_{ij} + \beta_{5j}\text{sexM}_{ij} + e_{ij} 
+\end{aligned}
+$$
+
+Lv-2:
+
+$$
+\begin{aligned}
+  \beta_{0j} & = \gamma_{00} + u_{0j}  \\
+  \beta_{1j} & = \gamma_{10}  + \gamma_{20} + \gamma_{30} + \gamma_{40} +\gamma_{50}   
+\end{aligned}
+$$
+
+
+### Growth model
+
+Lv-1: 
+$$
+\begin{aligned}
+\text{CBCL}_{ti} = \beta_{0i} + \beta_{1i} \text{time}_{ti} + \beta_{2j} \text{PDS}_{ti} + e_{ti} 
+\end{aligned}
+$$
+
+Lv-2: 
+$$
+\begin{aligned}
+  \beta_{0i} = \gamma_{00} + \gamma_{01} \text{pandemic}_{i} + \gamma_{02}\text{male}_{i} + \gamma_{03}\text{sexM}_{i} + \gamma_{04}\text{high.educ2}_{i} +           \gamma_{05}\text{high.educ3}_{i} + \gamma_{06}\text{high.educ4}_{i} + \gamma_{07}\text{high.educ5}_{i} + u_{0i} \\
+  \beta_{1i} = \gamma_{10} + \gamma_{11} \text{pandemic}_{i} + \gamma_{20} + \gamma_{30} + \gamma_{40} + \gamma_{50} + \gamma_{60} + \gamma_{70}
+\end{aligned}
+$$
+
+## Fit models
+
+### Test relationship between ABCD time and CBCL scores at baseline and one-year follow-up
+
+
+
+### Effect of group on CBCL change scores 
+
+```{r lmer-change}
+#formulate.1<-as.formula(cbcl_change_y1base ~ pandemic + sex + cbcl_baseline  + age_baseline +pds_baseline+ interview_y1base_mos  + (1|site_id_l))
+formulate.1<-as.formula(cbcl_change_y1base ~ pandemic + sex + cbcl_baseline + time_baseline + interview_y1base_mos + (1|fam_id))
+formulate.2<-as.formula(cbcl_change_y2y1 ~ pandemic + sex + cbcl_y1 + time_y1 + interview_y2y1_mos +(1|fam_id))
+
+#formulate.3<-as.formula(cbcl_change_y2base ~ pandemic + sex + cbcl_baseline + age_baseline +pds_baseline+ interview_y2base_mos  + (1|site_id_l))
+
+pvec.1<-vector()
+singvec.1<-vector()
+cbclmodel.1=list()
+cbclmodelsum.1=list()
+pvec.2<-vector()
+singvec.2<-vector()
+cbclmodel.2=list()
+cbclmodelsum.2=list() 
+#pvec.3<-vector()
+#singvec.3<-vector()
+#cbclmodel.3=list()
+#cbclmodelsum.3=list() 
+
+for (cc in 1:7) {
+ cbcl_change_y1base<-unlist(df_wide_subset[,cbcls_cnames_y1base[cc]])
+ cbcl_baseline<-unlist(df_wide_subset[,cbcls_cnames_base[cc]])
+ cbclmodel.1[[cc]]<-lmer(formulate.1,data=df_wide_subset, REML=F)
+ cbclmodelsum.1[[cc]]<-summary(cbclmodel.1[[cc]])
+ pvec.1[cc]<-cbclmodelsum.1[[cc]][["coefficients"]][2,5]
+ singvec.1[cc]<-isSingular(cbclmodel.1[[cc]])
+ ## model set 2
+ cbcl_change_y2y1<-unlist(df_wide_subset[,cbcls_cnames_y2y1[cc]])
+ cbcl_y1<-unlist(df_wide_subset[,cbcls_cnames_y1[cc]])
+ cbclmodel.2[[cc]]<-lmer(formulate.2,data=df_wide_subset, REML=F)
+ cbclmodelsum.2[[cc]]<-summary(cbclmodel.2[[cc]])
+ pvec.2[cc]<-cbclmodelsum.2[[cc]][["coefficients"]][2,5]
+ singvec.2[cc]<-isSingular(cbclmodel.2[[cc]])
+ ## model set 3
+ # cbcl_change_y2base<-unlist(df_wide_subset[,cbcls_cnames_y2base[cc]])
+ # cbclmodel.3[[cc]]<-lmer(formulate.3,data=df_wide_subset, REML=F)
+ # cbclmodelsum.3[[cc]]<-summary(cbclmodel.3[[cc]])
+ # pvec.3[cc]<-cbclmodelsum.3[[cc]][["coefficients"]][2,5]
+ # singvec.3[cc]<-isSingular(cbclmodel.3[[cc]])
+}
+
+#Group effects
+cbcls_cnames_y1base[which(pvec.1<=0.05)] 
+cbcls_cnames_y2y1[which(pvec.2<=0.05)] 
+#cbcls_cnames_y2base[which(pvec.3<=0.05)]
+
+```
+
+# Final analyses
+## CBCL ~ Age(centered) * Pandemic Group + Puberty + Parental Education + (1|GUID) + (1|Site/FamilyID)
+
+```{r age*group}
+
+formulate3<-as.formula(cbclscale.3~time*pandemic+sex+pds+high.educ+(1|src_subject_id)+ (1|site_id_l/fam_id))
+
+##
+cbclmodel.int.3=list()
+cbclmodelsum.int.3=list()
+pvec.int.3<-vector()
+##
+
+for (cc in 1:7){
+  cbclscale.3<-df[which((df$event=="1" | df$event=="2")  & (df$src_subject_id %in% df_wide_subset$src_subject_id)),cbcls_sb[cc]]
+  cbclmodel.int.3[[cc]]<-lmer(formulate3,data=df[which((df$event=="1" | df$event=="2") & (df$src_subject_id %in%    df_wide_subset$src_subject_id)),], REML=F)
+  cbclmodelsum.int.3[[cc]]<-summary(cbclmodel.int.3[[cc]])
+  pvec.int.3[cc]<-cbclmodelsum.int.3[[cc]][["coefficients"]][10,5]
+}
+
+p.adjust(pvec.int.3,"fdr")
+
+cbclmodelsum.int.3
+```
+
+## Trends 
+
+```{r lmer-duration}
+
+# formulate.time.1<-as.formula(cbclscale.1 ~ abcd_time_mos + sex + time)
+# formulate.time.base<-as.formula(cbclscale.base ~ abcd_time_mos +sex + time)
+# 
+# cbcl_time_mod.base=list()
+# cbcl_time_modsum.base=list()
+# pvec.time.base<-vector()
+# singvec.time.base<-vector()
+# cbcl_time_mod.1=list()
+# cbcl_time_modsum.1=list()
+# pvec.time.1<-vector()
+# singvec.time.1<-vector()
+# 
+# for (cc in 1:7) {
+#   cbclscale.base<-df[which(df$eventname=="baseline_year_1_arm_1"),cbcls_sb[cc]]
+#   cbcl_time_mod.base[[cc]]<-lmer(formulate.time.base,data=df[which(df$eventname=="baseline_year_1_arm_1"),], REML=F)
+#   cbcl_time_modsum.base[[cc]]<-summary(cbcl_time_mod.base[[cc]])
+#   pvec.time.base[cc]<-cbcl_time_modsum.base[[cc]][["coefficients"]][2,5]
+#   singvec.time.base[cc]<-isSingular(cbcl_time_mod.base[[cc]])
+#   cbclscale.1<-df[which(df$eventname=="1_year_follow_up_y_arm_1"),cbcls_sb[cc]]
+#   cbcl_time_mod.1[[cc]]<-lmer(formulate.time.1,data=df[which(df$eventname=="1_year_follow_up_y_arm_1"),], REML=F)
+#   cbcl_time_modsum.1[[cc]]<-summary(cbcl_time_mod.1[[cc]])
+#   pvec.time.1[cc]<-cbcl_time_modsum.1[[cc]][["coefficients"]][2,5]
+#   singvec.time.1[cc]<-isSingular(cbcl_time_mod.1[[cc]])
+# }
+# # ABCD time effects at baseline
+# cbcls_sb[which(pvec.time.base<=0.05)]
+# # ABCD time effects at year 1
+# cbcls_sb[which(pvec.time.1<=0.05)]
+# 
+# summary(lmer(cbcl_scr_syn_rulebreak_r_sb ~ abcd_time_mos + sex + time +pds + (1|site_id_l), data=df[which(df$eventname=="1_year_follow_up_y_arm_1"),]))
+# 
+# ggplot(df[which(df$eventname=="1_year_follow_up_y_arm_1"),],aes(x=abcd_time_mos, y=cbcl_scr_syn_rulebreak_r_sb)) + 
+#   geom_boxplot(aes(abcd_time_mos, cbcl_scr_syn_rulebreak_r_sb, group=abcd_time_mos)) +
+#   geom_smooth() 
+
+```
+
+```{r trends-month}
+
+df$intervew.month<-as.numeric(df$interview.month)
+
+formulate.trend<-as.formula(cbclscale ~ interview.month  + (interview.month|src_subject_id))
+
+trend_mos<-list()
+
+trend_mos[[1]] <- glmmTMB(cbcl_scr_syn_withdep_r_sb ~ interview.month + (interview.month | src_subject_id),
+    data = df[which(df$pandemic_mos_expo=="0"),],
+    REML = TRUE
+)
+
+trend_mos[[2]] <- glmmTMB(cbcl_scr_syn_anxdep_r_sb ~ interview.month + (interview.month | src_subject_id),
+    data = df[which(df$pandemic_mos_expo=="0"),],
+    REML = TRUE
+)
+
+trend_mos[[3]] <- glmmTMB(cbcl_scr_syn_somatic_r_sb ~ interview.month + (interview.month | src_subject_id),
+    data = df[which(df$pandemic_mos_expo=="0"),],
+    REML = TRUE
+)
+
+trend_mos[[4]] <- glmmTMB(cbcl_scr_syn_social_r_sb ~ interview.month + (interview.month | src_subject_id),
+    data = df[which(df$pandemic_mos_expo=="0"),],
+    REML = TRUE
+)
+
+trend_mos[[5]] <- glmmTMB(cbcl_scr_syn_thought_r_sb ~ interview.month + (interview.month | src_subject_id),
+    data = df[which(df$pandemic_mos_expo=="0"),],
+    REML = TRUE
+)
+
+trend_mos[[6]]<- glmmTMB(cbcl_scr_syn_aggressive_r_sb ~ interview.month + (interview.month | src_subject_id),
+    data = df[which(df$pandemic_mos_expo=="0"),],
+    REML = TRUE
+) ## convergence issues
+
+trend_mos[[7]]<- glmmTMB(cbcl_scr_syn_aggressive_r_sb ~ interview.month + (1 | src_subject_id),
+    data = df[which(df$pandemic_mos_expo=="0"),],
+    REML = TRUE
+) 
+
+trend_mos[[8]]<- glmmTMB(cbcl_scr_syn_rulebreak_r_sb ~ interview.month + (interview.month | src_subject_id),
+    data = df[which(df$pandemic_mos_expo=="0"),],
+    REML = TRUE
+)
+
+summary(trend_mos[[1]])
+summary(trend_mos[[2]])
+summary(trend_mos[[3]])
+summary(trend_mos[[4]])
+summary(trend_mos[[5]])
+summary(trend_mos[[6]])
+summary(trend_mos[[7]])
+summary(trend_mos[[8]])
+```
+
+
+
+## Categorical x categorical models 
+CBCL ~ TimePoint(categorical) * PandemicGroup + Puberty + Parental Education + (1|GUID) + (1|Site/FamilyID)
+Here, TimePoint would be coded as -1 for baseline and 1 for Year 2
+Effects code timepoint-  baseline measurement so that it becomes -1 and 1
+
+```{r}
+# df$timepoint<-NA
+# df$timepoint[which(df$event=="1" | df$event=="2")]<-df$event[which(df$event=="1" | df$event=="2")] #-1
+# df$timepoint<-as.factor(df$timepoint)
+# #contrasts(df$pandemic_y2)<-contr.sum(2)
+# 
+# formulate<-as.formula(cbclscale~timepoint*pandemic_y2+sex+pds+high.educ+(1|src_subject_id)+(1|site_id_l/fam_id))
+# 
+# cbclmodel.cat=list()
+# cbclmodelsum.cat=list()
+# pvec.cat<-vector()
+# 
+# for (cc in 1:7){
+#   cbclscale<-df[which(df$event=="1" | df$event=="2"),cbcls_sb[cc]]
+#   cbclmodel.cat[[cc]]<-lmer(formulate,data=df[which(df$event=="1" | df$event=="2"),], REML=F)
+#   cbclmodelsum.cat[[cc]]<-summary(cbclmodel.cat[[cc]])
+#   pvec.cat[cc]<-cbclmodelsum.cat[[cc]][["coefficients"]][10,5]
+# }
+```
+
+## Poisson distribution
+
+
+## Model comparison 
+
+A closely-related way to estimate the out-of-sample prediction is to use information criteria, which is based on information theory. Simply speaking, these are measures of the expected out-of-sample prediction error under certain assumptions (e.g., normality). The most famous one is the Akaike information criterion (AIC), named after statistician Hirotugu Akaike, who derived that under certain assumptions, the expected prediction error is the deviance plus two times the number of parameters in the model. We can obtain AICs using the generic AIC() function for cluster-level predictions, and the cAIC4::cAIC() function for individual-level predictions. 
+
+```{r comparison}
+#cAIC(cbclmodel.cat[[2]])[c("df", "caic")] #keeps crashing
+```
+
+
+## Figures and tables
+```{r model-sum}
+# msum_y2y1change<-msummary(
+#     list(
+#         "Withdrawn/Depressed" = cbclmodel.2[[1]],
+#         "Anxious/Depressed" = cbclmodel.2[[2]], 
+#         "Somatic Complaints" = cbclmodel.2[[3]],
+#         "Social Problems" = cbclmodel.2[[4]], 
+#         "Thought Problems" = cbclmodel.2[[5]],
+#         "Aggressive Behavior" = cbclmodel.2[[6]], 
+#         "Rule-breaking behavior"= cbclmodel.2[[7]]), 
+#         estimate = c("{estimate} [{conf.low}, {conf.high}]"),
+#         title="**Table 2.** Fixed effects coefficients by CBCL scale for variables predicting change in raw score between one-year follow-up and two-year follow-up")
+# msummary(
+#       list(
+#         "Withdrawn/Depressed" = cbclmodel.1[[1]],
+#         "Anxious/Depressed" = cbclmodel.1[[2]], 
+#         "Somatic Complaints" = cbclmodel.1[[3]],
+#         "Social Problems" = cbclmodel.1[[4]], 
+#         "Thought Problems" = cbclmodel.1[[5]],
+#         "Aggressive Behavior" = cbclmodel.1[[6]], 
+#         "Rule-breaking behavior"= cbclmodel.1[[7]]), 
+#         estimate = c("{estimate} [{conf.low}, {conf.high}]"),
+#         title="Fixed effects coefficients by CBCL scale for variables predicting change in raw score between baseline and #one-year follow-up visits.", output ="gt") 
+# msummary(
+#     list(
+#          "Withdrawn/Depressed" =cbclmodel.int.3[[1]], 
+#          "Anxious/Depressed" =cbclmodel.int.3[[2]], 
+#          "Somatic Complaints" =cbclmodel.int.3[[3]],
+#          "Social Problems" =cbclmodel.int.3[[4]],
+#          "Thought Problems" =cbclmodel.int.3[[5]],
+#          "Aggressive Behavior" =cbclmodel.int.3[[6]],
+#          "Rule-breaking behavior"=cbclmodel.int.3[[7]]),
+#          estimate = c("{estimate} [{conf.low}, {conf.high}]"), 
+#          title="**Table 3**. Fixed effects coefficients by CBCL scale for variables predicting raw score at one-year follow-up and two-year follow-up", output ="gt")
+
+#msum_y2y1change
+#msum_y1y2_growth
+#msum_y1base_change
+msummary(
+    list("Somatic Complaints" =cbclmodel.int.3[[3]],
+         "Aggressive Behavior" =cbclmodel.int.3[[6]],
+         "Rule-breaking behavior"=cbclmodel.int.3[[7]]),
+         estimate = c("{estimate} [{conf.low}, {conf.high}]"), 
+         title="**Table 3**. Fixed effects coefficients by CBCL scale for variables predicting raw score at one-year follow-up and two-year follow-up", output ="gt")
+
+msummary(
+    list("Anxious/Depressed" = cbclmodel.2[[2]], 
+        "Somatic Complaints" = cbclmodel.2[[3]],
+        "Aggressive Behavior" = cbclmodel.2[[6]]),  
+        estimate = c("{estimate} [{conf.low}, {conf.high}]"),
+        title="**Table 2**. Fixed effects coefficients by CBCL scale for variables predicting change in raw score between one-year follow-up and two-year follow-up", output="gt")
+
+#msum_y2y1change_sig
+#msum_y1y2_sig_growth
+```
+
+
+```{r}
+# Plotting
+p1 <- ggplot(df[which(df$pandemic_mos_expo=="0"),], aes(x = time, y = cbcl_scr_syn_anxdep_r_sb)) +
+    geom_point(alpha = 0.3) +
+    # add lines to connect the data for each person
+    geom_line(aes(group = src_subject_id), alpha = 0.3) +
+    # add a mean trajectory
+    stat_summary(fun = "mean", col = "red", size = 1, geom = "line")
+p2 <- ggplot(df[which(df$pandemic_mos_expo=="0"),], aes(x = time, y = cbcl_scr_syn_somatic_r_sb)) +
+    geom_point(alpha = 0.3) +
+    # add lines to connect the data for each person
+    geom_line(aes(group = src_subject_id), alpha = 0.3) +
+    # add a mean trajectory
+    stat_summary(fun = "mean", col = "red", size = 1, geom = "line")
+p3 <- ggplot(df[which(df$pandemic_mos_expo=="0"),], aes(x = time, y = cbcl_scr_syn_aggressive_r_sb)) +
+    geom_point(alpha = 0.3) +
+    # add lines to connect the data for each person
+    geom_line(aes(group = src_subject_id), alpha = 0.3) +
+    # add a mean trajectory
+    stat_summary(fun = "mean", col = "red", size = 1, geom = "line")
+
+p1
+p2
+p3
+
+```
+
+```{r plot means}
+
+# plot_model(cbclmodel.cat[[2]],type="int", mdrt.values="meansd", show.data = TRUE, jitter = 0.05)
+# 
+# cat_plot(cbclmodel.cat[[2]], pred = timepoint, modx = pandemic_y2, geom = "line", point.shape = TRUE,
+#          colors = "Set2", legend.main="Group", x.label="Timepoint", y.label= "CBCL Anxious/Depressed Scale", pred.labels = c("One-year follow-up", "Two-year follow-up"), modx.labels=c("Pre-pandemic", "Intra-pandemic"))
+# 
+# cat_plot(cbclmodel.cat[[3]], pred = timepoint, modx = pandemic_y2, geom = "line", point.shape = TRUE,
+#          colors = "Set2", legend.main="Group", x.label="Timepoint", y.label= "CBCL Somatic Complaints Scale", pred.labels = c("One-year follow-up", "Two-year follow-up"), modx.labels=c("Pre-pandemic", "Intra-pandemic")) # plot.points=T
+# 
+# cat_plot(cbclmodel.cat[[6]], pred = timepoint, modx = pandemic_y2, geom = "line", point.shape = TRUE,
+#          colors = "Set2", legend.main="Group", x.label="Timepoint", y.label= "CBCL Aggressive Behavior Scale", pred.labels = c("One-year follow-up", "Two-year follow-up"), modx.labels=c("Pre-pandemic", "Intra-pandemic")) # plot.points=T
+```
+
+###
+```{r plot-growth}
+## CBCL PLOTS 
+
+cbcl_rulebreak_plot<-plot_model(cbclmodel.int.3[[7]],type="int", show.data = TRUE, jitter = 0.05) +xlab("Age (months)") + ylab("Rule-breaking behavior") + ggtitle("Figure 3. Predicted values of CBCL Rule-breaking Behavior scores at one-year\nfollow-up and two-year follow-up visits") + scale_x_continuous(breaks=seq(0,60,20), labels=c("107", "127","147","167")) + scale_fill_discrete(labels=c('Pre-pandemic', 'Intra-pandemic')) + labs(title=NULL) + labs(colour="Group")
+  
+# cbcl_somatic_plot<-plot_model(cbclmodel.int.3[[3]],type="int", show.data = TRUE, jitter = 0.05)+xlab("Age (months)") + ylab("Somatic complaints") + + ggtitle("Figure 3. Predicted values of CBCL Somatic Complaints scores at one-year\nfollow-up and two-year follow-up visits") + theme(plot.title = element_text(size=13, face="bold")) + scale_x_continuous(breaks=seq(0,60,20), labels=c("107", "127","147","167")) + theme(legend.position = "none") + scale_fill_discrete(labels=c('Pre-pandemic', 'Intra-pandemic')) + labs(title=NULL) + labs(colour="Group")
+
+cbcl_aggressive_plot<-plot_model(cbclmodel.int.3[[6]],type="int", show.data = TRUE, jitter = 0.05) + labs(title=NULL) +xlab("Age (months)") + ylab("Aggressive behavior") + labs(colour="Group") + scale_fill_discrete(labels=c('Pre-pandemic', 'Intra-pandemic')) + scale_x_continuous(breaks=seq(0,60,20), labels=c("107", "127","147","167")) + labs(title=NULL) + labs(colour="Group") + scale_fill_discrete(labels=c('Pre-pandemic', 'Intra-pandemic'))
+
+# plot<-ggarrange(cbcl_somatic_plot, cbcl_aggressive_plot, cbcl_rulebreak_plot, ncol=1, nrow=3, common.legend = TRUE, legend="bottom") 
+# 
+# annotate_figure(plot, top = text_grob("Figure 1. Predicted values of CBCL scores at one-year follow-up and\ntwo-year follow-up for scales that had significant group by time effect", face = "bold", size = 14))
+
+plot_model(cbclmodel.int.3[[3]],type="int", show.data = TRUE, jitter = 0.05)+xlab("Age (months)") + ylab("Somatic complaints") + ggtitle("Figure 1. Predicted values of CBCL Somatic Complaints scores at one-year\nfollow-up and two-year follow-up visits") + theme(plot.title = element_text(size=13, face="bold")) + scale_x_continuous(breaks=seq(0,60,20), labels=c("107", "127","147","167")) + theme(legend.position = "none") + scale_fill_discrete(labels=c('Pre-pandemic', 'Intra-pandemic')) + labs(colour="Group")
+
+plot_model(cbclmodel.int.3[[6]],type="int", show.data = TRUE, jitter = 0.05) + labs(title=NULL) +xlab("Age (months)") + ylab("Aggressive behavior") + scale_fill_discrete(labels=c('Pre-pandemic', 'Intra-pandemic')) + scale_x_continuous(breaks=seq(0,60,20), labels=c("107", "127","147","167")) + labs(colour="Group") + ggtitle("Figure 2. Predicted values of CBCL Aggressive Behavior scores at one-year\nfollow-up and two-year follow-up visits") + theme(plot.title = element_text(size=13, face="bold"))
+
+plot_model(cbclmodel.int.3[[7]],type="int", show.data = TRUE, jitter = 0.05) + xlab("Age (months)") + ylab("Rule-breaking behavior") + ggtitle("Figure 3. Predicted values of CBCL Rule-breaking Behavior scores at one-year\nfollow-up and two-year follow-up visits") + theme(plot.title = element_text(size=12, face="bold")) + scale_x_continuous(breaks=seq(0,60,20), labels=c("107", "127","147","167")) + scale_fill_discrete(labels=c('Pre-pandemic', 'Intra-pandemic')) + labs(colour="Group")
+
+```
+
+### 
+```{r plot-means-se}
+# pd <- position_dodge(0.1)
+# sumse.cbcl2 <- summarySE(df[which(df$event=="1"|df$event=="2"),], measurevar="cbcl_scr_syn_anxdep_r_sb",groupvars=c("pandemic_y2","eventname"), na.rm = T)
+# ggplot(sumse.cbcl2[1:4,], aes(x=eventname, y=cbcl_scr_syn_anxdep_r_sb, colour=pandemic_y2, group=pandemic_y2)) + 
+#     geom_errorbar(aes(ymin=cbcl_scr_syn_anxdep_r_sb-ci, ymax=cbcl_scr_syn_anxdep_r_sb+ci), colour="black", width=.1, position=pd) +
+#     geom_line(position=pd) +
+#     geom_point(position=pd, size=3) + 
+#     ylab("CBCL Anxious/Depressed Scale") + 
+#     labs(colour="Group") +
+#     scale_colour_discrete(labels = c("pre-pandemic","intra-pandemic"))
+# sumse.cbcl3 <- summarySE(df[which(df$event=="1"|df$event=="2"),],measurevar="cbcl_scr_syn_somatic_r_sb",groupvars=c("pandemic_y2","eventname"), na.rm = T)
+# ggplot(sumse.cbcl3[1:4,], aes(x=eventname, y=cbcl_scr_syn_somatic_r_sb, colour=pandemic_y2, group=pandemic_y2)) + 
+#     geom_errorbar(aes(ymin=cbcl_scr_syn_somatic_r_sb-ci, ymax=cbcl_scr_syn_somatic_r_sb+ci), colour="black", width=.1, position=pd) +
+#     geom_line(position=pd) +
+#     geom_point(position=pd, size=3) + 
+#     ylab("CBCL Somatic Complaints") + 
+#     labs(colour="Group") +
+#     scale_colour_discrete(labels = c("pre-pandemic","intra-pandemic"))
+# sumse.cbcl6 <- summarySE(df[which(df$event=="1"|df$event=="2"),],measurevar="cbcl_scr_syn_aggressive_r_sb",groupvars=c("pandemic_y2","eventname"), na.rm = T)
+# ggplot(sumse.cbcl6[1:4,], aes(x=eventname, y=cbcl_scr_syn_aggressive_r_sb, colour=pandemic_y2, group=pandemic_y2)) + 
+#     geom_errorbar(aes(ymin=cbcl_scr_syn_aggressive_r_sb-ci, ymax=cbcl_scr_syn_aggressive_r_sb+ci), colour="black", width=.1, position=pd) +
+#     geom_line(position=pd) +
+#     geom_point(position=pd, size=3) + 
+#     ylab("CBCL Aggressive Behavior") + 
+#     labs(colour="Group") +
+#     scale_colour_discrete(labels = c("pre-pandemic","intra-pandemic"))
+```
